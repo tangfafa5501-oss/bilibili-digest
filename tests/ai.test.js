@@ -722,7 +722,7 @@ test("编造的 id 与重复的 id 都被拒绝", () => {
     },
     SOURCE_BATCH,
   );
-  assert.deepEqual(Object.keys(polished), ["s1"]);
+  assert.deepEqual(Object.keys(polished), []);
   assert.deepEqual(
     rejected.map((item) => item.reason).sort(),
     ["DUPLICATE_ID", "MISSING", "UNKNOWN_ID"],
@@ -913,66 +913,74 @@ test("多原始条目的长句译文覆盖合理时仍可通过", () => {
   assert.deepEqual(rejected, []);
 });
 
-test("自然句按真实来源片段拆成稳定翻译单元，缺一片就不合成整句", () => {
-  const segments = [{
-    id: "sentence-1",
-    start: 222,
-    text: "I can stay for a week. Uncle Podger got up and tried again,",
-    sourceEntryIndexes: [30, 31],
-    sourceParts: [
-      { entryIndex: 30, start: 222, text: "I can stay for a week." },
-      { entryIndex: 31, start: 227, text: "Uncle Podger got up and tried again," },
-    ],
-  }];
-
-  const units = AI.buildTranslationUnits(segments);
-  assert.deepEqual(units.map(({ id, parentId, text, start }) => ({ id, parentId, text, start })), [
+test("原始 cue 的翻译身份只由索引和真实时间轴决定", () => {
+  const cues = AI.buildTranslationCues([
+    { text: "I can stay for a week.", start: 222, duration: 5 },
+    { text: "Uncle Podger got up and tried again,", start: 227, duration: 4 },
+  ]);
+  assert.deepEqual(cues.map(({ id, text, start, duration }) => ({ id, text, start, duration })), [
     {
-      id: "sentence-1::part-0",
-      parentId: "sentence-1",
+      id: "cue-0-222000-5000",
       text: "I can stay for a week.",
       start: 222,
+      duration: 5,
     },
     {
-      id: "sentence-1::part-1",
-      parentId: "sentence-1",
+      id: "cue-1-227000-4000",
       text: "Uncle Podger got up and tried again,",
       start: 227,
+      duration: 4,
     },
   ]);
+});
+
+test("自然句跨多个 cue 时，缺任一 cue 都不派生整句译文", () => {
+  const segments = [{
+    id: "sentence-1",
+    sourceCueIds: ["cue-a", "cue-b"],
+  }];
   assert.deepEqual(
-    AI.composeTranslatedSegments(units, {
-      "sentence-1::part-0": "我可以住一个星期。",
+    AI.composeTranslatedSegments(segments, {
+      "cue-a": { status: "translated", text: "我可以住一个星期。" },
+      "cue-b": { status: "failed", reason: "MISSING" },
     }),
-    {},
-    "只有前半译文时不能把整句标为完成",
+    { translated: {}, failed: ["sentence-1"] },
   );
   assert.deepEqual(
-    AI.composeTranslatedSegments(units, {
-      "sentence-1::part-0": "我可以住一个星期。",
-      "sentence-1::part-1": "波杰叔叔站起来又试了一次，",
+    AI.composeTranslatedSegments(segments, {
+      "cue-a": { status: "translated", text: "我可以住一个星期。" },
+      "cue-b": { status: "translated", text: "波杰叔叔又试了一次，" },
     }),
-    { "sentence-1": "我可以住一个星期。 波杰叔叔站起来又试了一次，" },
+    {
+      translated: { "sentence-1": "我可以住一个星期。 波杰叔叔又试了一次，" },
+      failed: [],
+    },
   );
 });
 
-test("短来源片段只翻译开头几个字也会被覆盖校验拒绝", () => {
-  const unit = [{
-    id: "sentence-1::part-1",
-    parentId: "sentence-1",
-    partIndex: 1,
-    text: "Uncle Podger got up and tried again, and at midnight he returned with the hammer.",
-    translationUnit: true,
-    sourceEntryIndexes: [31],
-  }];
-  const { translated, rejected } = AI.alignTranslatedSegments(
-    { segments: [{ id: unit[0].id, text: "波杰叔叔起身。" }] },
-    unit,
+test("canonical cue 对重复 id 与异常超长译文 fail-closed", () => {
+  const cues = AI.buildTranslationCues([
+    { text: "Short source cue.", start: 10, duration: 2 },
+  ]);
+  const duplicate = AI.alignTranslatedSegments(
+    {
+      segments: [
+        { id: cues[0].id, text: "短字幕。" },
+        { id: cues[0].id, text: "另一条。" },
+      ],
+    },
+    cues,
   );
+  assert.deepEqual(duplicate.translated, {});
+  assert.ok(duplicate.rejected.some((item) => item.reason === "DUPLICATE_ID"));
 
-  assert.deepEqual(translated, {});
-  assert.deepEqual(rejected, [
-    { id: "sentence-1::part-1", reason: "INCOMPLETE_TRANSLATION" },
+  const overlong = AI.alignTranslatedSegments(
+    { segments: [{ id: cues[0].id, text: "译".repeat(100) }] },
+    cues,
+  );
+  assert.deepEqual(overlong.translated, {});
+  assert.deepEqual(overlong.rejected, [
+    { id: cues[0].id, reason: "OVERLONG_TRANSLATION" },
   ]);
 });
 

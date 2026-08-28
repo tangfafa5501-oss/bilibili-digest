@@ -175,37 +175,49 @@ test("自然句跨越多条字幕时取第一条的真实开始时间", () => {
     ],
   );
   assert.deepEqual(segments[0].sourceParts, [
-    { entryIndex: 0, start: 2, text: "第一句话讲的是背景，" },
-    { entryIndex: 1, start: 5, text: "它决定后续取舍。" },
+    {
+      entryIndex: 0,
+      cueId: "cue-0-2000-3000",
+      start: 2,
+      duration: 3,
+      text: "第一句话讲的是背景，",
+    },
+    {
+      entryIndex: 1,
+      cueId: "cue-1-5000-3000",
+      start: 5,
+      duration: 3,
+      text: "它决定后续取舍。",
+    },
+  ]);
+  assert.deepEqual(segments[0].sourceCueIds, [
+    "cue-0-2000-3000",
+    "cue-1-5000-3000",
   ]);
 });
 
-test("同一原始字幕里的多句共享真实时间，不按字符比例伪造", () => {
+test("同一原始 cue 不拆成多个翻译身份，显示层保留完整内容", () => {
   const segments = T.groupTranscriptEntries([
     { text: "第一句。第二句？第三句没有句号", start: 12.5, duration: 6 },
   ]);
 
   assert.deepEqual(
     segments.map(({ text, start, fallback }) => ({ text, start, fallback })),
-    [
-      { text: "第一句。", start: 12.5, fallback: false },
-      { text: "第二句？", start: 12.5, fallback: false },
-      { text: "第三句没有句号", start: 12.5, fallback: true },
-    ],
+    [{ text: "第一句。第二句？第三句没有句号", start: 12.5, fallback: true }],
   );
+  assert.deepEqual(segments[0].sourceCueIds, ["cue-0-12500-6000"]);
 });
 
-test("句末引号归入自然句，逗号和分号不提前切句", () => {
+test("自然句只在 cue 边界聚合，不拆开同一 cue 内的第二句", () => {
   const segments = T.groupTranscriptEntries([
     { text: "他说：“先看这里，", start: 0, duration: 2 },
     { text: "再看那里；最后结束。” 下一句！", start: 2, duration: 4 },
   ]);
 
   assert.deepEqual(segments.map((segment) => segment.text), [
-    "他说：“先看这里，再看那里；最后结束。”",
-    "下一句！",
+    "他说：“先看这里，再看那里；最后结束。” 下一句！",
   ]);
-  assert.deepEqual(segments.map((segment) => segment.start), [0, 2]);
+  assert.deepEqual(segments.map((segment) => segment.start), [0]);
 });
 
 test("每句 id 在相同输入下保持稳定，供翻译和顺句缓存使用", () => {

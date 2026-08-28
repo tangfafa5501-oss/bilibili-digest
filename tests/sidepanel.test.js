@@ -781,6 +781,27 @@ test("双语模式下原文和译文各占一行，没翻到的那条给占位",
   assert.equal(pending.children[1].textContent, "翻译中…");
 });
 
+test("缓存里的失败 cue 映射为可重试状态，不会继续显示旧自然句译文", async () => {
+  const ctx = createContext({
+    transcript: transcriptResult({
+      ...EN,
+      translated: { s1: "第一段译文" },
+      translationFailed: ["s2"],
+    }),
+  });
+  ctx.state.bvid = "BV1xx411c7mD";
+  await ctx.loadTranscript();
+
+  const failed = ctx.el("cached-failed");
+  ctx.paintSegmentText(failed, SEGMENTS[1]);
+  assert.equal(failed.children[1].textContent, "未翻译（可重试）");
+
+  await ctx.setTranscriptMode("original");
+  await ctx.setTranscriptMode("bilingual");
+  const request = ctx.sent.find((message) => message.action === "translateSegments");
+  assert.deepEqual(request.segmentIds, ["s2"]);
+});
+
 test("切到译文视图会去翻译，结果回填进 state", async () => {
   const ctx = createContext({ transcript: transcriptResult(EN) });
   ctx.state.bvid = "BV1xx411c7mD";

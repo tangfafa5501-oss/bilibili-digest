@@ -719,12 +719,18 @@ async function handleSegmentRewrite(
     return { success: true, fromCache: true, [task.cacheKey]: hit };
   }
 
-  const translationUnits = kind === "translate"
-    ? BILI_AI.buildTranslationUnits(todo)
+  const requestedCueIds = new Set(
+    kind === "translate" ? todo.flatMap((segment) => segment.sourceCueIds || []) : [],
+  );
+  const translationCues = kind === "translate"
+    ? BILI_AI.buildTranslationCues(transcript.transcript)
+        .filter((cue) => requestedCueIds.has(cue.id))
     : [];
-  const cachedTranslatedParts = transcript.translatedParts || {};
+  const cachedTranslatedCues = transcript.translatedCues || {};
   const modelItems = kind === "translate"
-    ? translationUnits.filter((unit) => !cachedTranslatedParts[unit.id])
+    ? translationCues.filter(
+        (cue) => cachedTranslatedCues[cue.id]?.status !== "translated",
+      )
     : todo;
 
   try {
@@ -778,26 +784,47 @@ async function handleSegmentRewrite(
         };
       }
 
-      const translatedParts = {
-        ...(current.translatedParts || {}),
-        ...accepted,
-      };
-      const completed = BILI_AI.composeTranslatedSegments(
-        translationUnits,
-        translatedParts,
+      const translatedCues = { ...(current.translatedCues || {}) };
+      const rejectedById = new Map(
+        rejected
+          .filter((item) => modelItems.some((cue) => cue.id === item.id))
+          .map((item) => [item.id, item.reason]),
+      );
+      for (const cue of modelItems) {
+        translatedCues[cue.id] = accepted[cue.id]
+          ? {
+              cueId: cue.id,
+              start: cue.start,
+              duration: cue.duration,
+              source: cue.text,
+              text: accepted[cue.id],
+              status: "translated",
+            }
+          : {
+              cueId: cue.id,
+              start: cue.start,
+              duration: cue.duration,
+              source: cue.text,
+              status: "failed",
+              reason: rejectedById.get(cue.id) || "MISSING",
+            };
+      }
+      const derived = BILI_AI.composeTranslatedSegments(
+        transcript.segments,
+        translatedCues,
       );
       return {
         ...current,
         ...persistable(transcript),
-        translatedParts,
-        translated: { ...(current.translated || {}), ...completed },
+        translatedParts: {},
+        translatedCues,
+        translated: derived.translated,
+        translationFailed: derived.failed,
       };
     });
 
     // 命中缓存的那部分也一并回给侧边栏，它只认返回值。
-    const response = kind === "translate"
-      ? BILI_AI.composeTranslatedSegments(translationUnits, saved.translatedParts || {})
-      : { ...accepted };
+    const response = kind === "translate" ? {} : { ...accepted };
     for (const segment of segments) {
       if (!response[segment.id] && saved[task.cacheKey][segment.id]) {
         response[segment.id] = saved[task.cacheKey][segment.id];

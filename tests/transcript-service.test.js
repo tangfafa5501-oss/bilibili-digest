@@ -124,7 +124,7 @@ test("缓存命中时不再走网络，脏标志被现算值覆盖", async () =>
   assert.equal(apiCalls.length, 0, "命中缓存不应访问网络");
 });
 
-test("schema 3 缓存重建为带来源片段的自然句，并清掉不完整译文", async () => {
+test("旧缓存迁移为 canonical cue，并清掉自然句级派生译文", async () => {
   apiCalls.length = 0;
   const analysis = { chapters: [{ title: "保留的概览" }] };
   const analysisFailures = [{ index: 2, startSeconds: 120, endSeconds: 180 }];
@@ -152,16 +152,16 @@ test("schema 3 缓存重建为带来源片段的自然句，并清掉不完整�
   const result = await service.fetchTranscript(BVID, { page: 1 });
 
   assert.equal(apiCalls.length, 0, "迁移缓存不应重新访问 B 站");
-  assert.equal(result.segmentSchemaVersion, 4);
+  assert.equal(result.segmentSchemaVersion, 6);
   assert.deepEqual(result.segments.map((segment) => segment.text), [
-    "第一句。",
-    "第二句！",
+    "第一句。第二句！",
     "没有标点的尾句",
   ]);
-  assert.deepEqual(result.segments.map((segment) => segment.start), [0, 0, 2]);
-  assert.deepEqual(result.polished, { "segment-s0-0-0": "保留的顺句。" });
+  assert.deepEqual(result.segments.map((segment) => segment.start), [0, 2]);
+  assert.deepEqual(result.polished, {});
   assert.deepEqual(result.translated, {});
   assert.deepEqual(result.translatedParts, {});
+  assert.deepEqual(result.translatedCues, {});
   assert.ok(result.segments.every((segment) => segment.sourceParts.length > 0));
   assert.deepEqual(result.analysis, analysis, "概览等无关学习资料必须保留");
   assert.deepEqual(result.analysisFailures, analysisFailures);
@@ -169,13 +169,34 @@ test("schema 3 缓存重建为带来源片段的自然句，并清掉不完整�
   assert.equal(cache.calls.save, 1, "迁移结果应回写，后续不重复迁移");
 });
 
-test("schema 4 的当前译文直接复用，不重复迁移或清空", async () => {
+test("schema 6 的有效 cue 译文重新派生自然句且不重复迁移", async () => {
   apiCalls.length = 0;
   const current = {
-    transcript: [{ start: 0, duration: 2, text: "Current sentence." }],
-    segments: [{ id: "segment-s0-0-0", start: 0, text: "Current sentence." }],
-    segmentSchemaVersion: 4,
+    transcript: [{
+      cueId: "cue-0-0-2000",
+      start: 0,
+      duration: 2,
+      text: "Current sentence.",
+    }],
+    segments: [{
+      id: "segment-s0-0-0",
+      start: 0,
+      text: "Current sentence.",
+      sourceCueIds: ["cue-0-0-2000"],
+    }],
+    segmentSchemaVersion: 6,
     translated: { "segment-s0-0-0": "当前句。" },
+    translatedCues: {
+      "cue-0-0-2000": {
+        cueId: "cue-0-0-2000",
+        start: 0,
+        duration: 2,
+        source: "Current sentence.",
+        text: "当前句。",
+        status: "translated",
+      },
+    },
+    translationFailed: [],
   };
   const cache = makeFakeCache({ [`${BVID}:p1`]: current });
   const { service } = makeHarness({ cache });
@@ -185,6 +206,42 @@ test("schema 4 的当前译文直接复用，不重复迁移或清空", async ()
   assert.deepEqual(result.translated, current.translated);
   assert.equal(cache.calls.save, 0, "当前 schema 不应重复迁移");
   assert.equal(apiCalls.length, 0);
+});
+
+test("缓存只有不完整自然句译文时不会命中，会按当前 cue 清空", async () => {
+  const cache = makeFakeCache({
+    [`${BVID}:p1`]: {
+      segmentSchemaVersion: 6,
+      transcript: [
+        { cueId: "cue-0-0-2000", start: 0, duration: 2, text: "First cue," },
+        { cueId: "cue-1-2000-2000", start: 2, duration: 2, text: "second cue." },
+      ],
+      segments: [{
+        id: "sentence",
+        start: 0,
+        text: "First cue, second cue.",
+        sourceCueIds: ["cue-0-0-2000", "cue-1-2000-2000"],
+      }],
+      translated: { sentence: "只覆盖第一条" },
+      translatedCues: {
+        "cue-0-0-2000": {
+          cueId: "cue-0-0-2000",
+          start: 0,
+          duration: 2,
+          source: "First cue,",
+          text: "第一条，",
+          status: "translated",
+        },
+      },
+    },
+  });
+  const { service } = makeHarness({ cache });
+
+  const result = await service.fetchTranscript(BVID, { page: 1 });
+
+  assert.deepEqual(result.translated, {});
+  assert.equal(result.translatedCues["cue-0-0-2000"].status, "translated");
+  assert.equal(cache.calls.save, 1, "坏的自然句派生缓存必须被重写");
 });
 
 test("缓存里的概览过期后能从学习资料恢复", async () => {
@@ -247,7 +304,7 @@ test("正常拉取组装全部字段并写入缓存", async () => {
   assert.equal(result.language, "zh-CN");
   assert.equal(result.isAiSubtitle, false);
   assert.equal(result.segments.length > 0, true);
-  assert.equal(result.segmentSchemaVersion, 4);
+  assert.equal(result.segmentSchemaVersion, 6);
   assert.ok(result.transcriptText.includes("第一句"));
   assert.equal(cache.calls.save, 1, "应落缓存");
   assert.equal(

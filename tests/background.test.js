@@ -254,38 +254,45 @@ test("后台任务协议拒绝同目标重复任务，并支持查询与取消",
   );
 });
 
-test("跨原始条目的自然句只重试漏译子片段，全部覆盖后才缓存整句", async () => {
+test("跨多个 cue 的自然句只重试漏回 cue，全部覆盖后才派生整句", async () => {
   const requestedIds = [];
   const ctx = createBackground({
     cached: {
-      segmentSchemaVersion: 4,
+      segmentSchemaVersion: 6,
       transcript: [
-        { start: 222, duration: 5, text: "I can stay for a week." },
-        { start: 227, duration: 4, text: "Uncle Podger got up and tried again," },
+        {
+          cueId: "cue-0-222000-5000",
+          start: 222,
+          duration: 5,
+          text: "I can stay for a week.",
+        },
+        {
+          cueId: "cue-1-227000-4000",
+          start: 227,
+          duration: 4,
+          text: "Uncle Podger got up and tried again,",
+        },
       ],
       segments: [{
         id: "sentence-1",
         start: 222,
         text: "I can stay for a week. Uncle Podger got up and tried again,",
-        sourceEntryIndexes: [0, 1],
-        sourceParts: [
-          { entryIndex: 0, start: 222, text: "I can stay for a week." },
-          { entryIndex: 1, start: 227, text: "Uncle Podger got up and tried again," },
-        ],
+        sourceCueIds: ["cue-0-222000-5000", "cue-1-227000-4000"],
       }],
       translated: {},
       translatedParts: {},
+      translatedCues: {},
       language: "en",
       videoInfo: { title: "标题" },
     },
     aiReply: ({ options }) => {
       const messages = JSON.parse(options.body).messages;
       const prompt = messages.at(-1).content;
-      const ids = [...prompt.matchAll(/sentence-1::part-\d/g)].map((match) => match[0]);
+      const ids = [...prompt.matchAll(/cue-\d+-\d+-\d+/g)].map((match) => match[0]);
       requestedIds.push([...new Set(ids)]);
       return requestedIds.length === 1
-        ? { segments: [{ id: "sentence-1::part-0", text: "我可以住一个星期。" }] }
-        : { segments: [{ id: "sentence-1::part-1", text: "波杰叔叔站起来又试了一次，" }] };
+        ? { segments: [{ id: "cue-0-222000-5000", text: "我可以住一个星期。" }] }
+        : { segments: [{ id: "cue-1-227000-4000", text: "波杰叔叔站起来又试了一次，" }] };
     },
   });
 
@@ -297,10 +304,18 @@ test("跨原始条目的自然句只重试漏译子片段，全部覆盖后才�
     page: 1,
     segmentIds: ["sentence-1"],
   });
-  assert.deepEqual(first.translated, {}, "只译前半时整句不能进入 translated 缓存");
   assert.equal(
-    ctx.cacheStore[`${BVID}:1`].translatedParts["sentence-1::part-0"],
+    Object.keys(first.translated || {}).length,
+    0,
+    "只译前半时整句不能进入 translated 缓存",
+  );
+  assert.equal(
+    ctx.cacheStore[`${BVID}:1`].translatedCues["cue-0-222000-5000"].text,
     "我可以住一个星期。",
+  );
+  assert.equal(
+    ctx.cacheStore[`${BVID}:1`].translatedCues["cue-1-227000-4000"].status,
+    "failed",
   );
 
   const second = await ctx.send({
@@ -310,7 +325,11 @@ test("跨原始条目的自然句只重试漏译子片段，全部覆盖后才�
     page: 1,
     segmentIds: ["sentence-1"],
   });
-  assert.deepEqual(requestedIds[1], ["sentence-1::part-1"], "重试不能重复发送已成功子片段");
+  assert.deepEqual(
+    requestedIds[1],
+    ["cue-1-227000-4000"],
+    "重试不能重复发送已成功 cue",
+  );
   assert.equal(
     second.translated["sentence-1"],
     "我可以住一个星期。 波杰叔叔站起来又试了一次，",

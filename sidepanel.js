@@ -388,7 +388,7 @@ async function loadTranscript({ force = false } = {}) {
     // 之前顺过的句、翻过的译随缓存一起回来了，直接复用，不必再花一次钱。
     state.polished = result.polished || {};
     state.translated = result.translated || {};
-    state.translationFailed = new Set();
+    state.translationFailed = new Set(result.translationFailed || []);
     state.polishRun += 1;
     // 缓存里有就直接摆出来，否则用户会以为上次白跑了。
     state.polishMode = Object.keys(state.polished).length > 0;
