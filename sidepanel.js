@@ -139,7 +139,7 @@ async function startAiTask(kind, target = {}) {
 const segmentView = {
   rows: [], // 与 segments 同下标
   byId: new Map(), // 分段 id → { row, text, searchText }
-  activeRow: null,
+  activeRows: [],
 };
 
 // 金句按钮的「已保存」完全跟着真实笔记数据走，不靠会话内存硬记：
@@ -434,7 +434,7 @@ function renderSegments(segments = []) {
   el("segmentCount").textContent = segmentCountText();
   segmentView.rows = [];
   segmentView.byId = new Map();
-  segmentView.activeRow = null;
+  segmentView.activeRows = [];
 
   const fragment = document.createDocumentFragment();
   segments.forEach((segment, index) => {
@@ -551,7 +551,9 @@ async function seekTo(seconds) {
   try {
     await chrome.tabs.sendMessage(state.tabId, {
       action: "seekTo",
-      seconds: Math.floor(seconds),
+      // B 站字幕 start 可能带小数；保留原值才能跳到句首所在原始条目的
+      // 真实开始位置。显示仍按整秒格式化，不代表定位精度只有一秒。
+      seconds: Math.max(0, Number(seconds) || 0),
     });
   } catch (error) {
     // 页面刚刷新时 content script 可能还没就位，忽略即可。
@@ -579,19 +581,40 @@ function highlightActive(currentSeconds) {
       high = mid - 1;
     }
   }
-  if (index === state.activeIndex) return;
+  // 同一条原始字幕里可能包含多句；这些句子必须共享真实 start，不能用字符
+  // 比例伪造时间。播放到该时间时把同起点的句子一起高亮。
+  let firstIndex = index;
+  while (
+    firstIndex > 0 &&
+    segments[firstIndex - 1].start === segments[index]?.start
+  ) {
+    firstIndex -= 1;
+  }
+  if (firstIndex === state.activeIndex) return;
 
-  segmentView.activeRow?.classList.remove("active");
-  state.activeIndex = index;
-  segmentView.activeRow = index >= 0 ? segmentView.rows[index] || null : null;
-  if (!segmentView.activeRow) return;
-  segmentView.activeRow.classList.add("active");
+  for (const row of segmentView.activeRows) row.classList.remove("active");
+  state.activeIndex = firstIndex;
+  segmentView.activeRows = [];
+  if (firstIndex < 0) return;
+  for (
+    let cursor = firstIndex;
+    cursor < segments.length &&
+    segments[cursor].start === segments[firstIndex].start;
+    cursor += 1
+  ) {
+    const row = segmentView.rows[cursor];
+    if (!row) continue;
+    row.classList.add("active");
+    segmentView.activeRows.push(row);
+  }
+  const firstActiveRow = segmentView.activeRows[0];
+  if (!firstActiveRow) return;
 
   // 搜索时列表被过滤过，滚动条属于搜索结果，不抢。
   if (state.searchQuery) return;
   if (Date.now() - state.lastUserScrollAt < AUTOSCROLL_SUPPRESS_MS) return;
   state.lastAutoScrollAt = Date.now();
-  segmentView.activeRow.scrollIntoView({ block: "center", behavior: "smooth" });
+  firstActiveRow.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
 async function trackPlayback() {
@@ -742,7 +765,7 @@ async function watchUiFontScale() {
 }
 
 function segmentCountText() {
-  return `${state.data?.segments?.length || 0} 段`;
+  return `${state.data?.segments?.length || 0} 句`;
 }
 
 // 借分段计数那一行显示临时提示，几秒后还原。

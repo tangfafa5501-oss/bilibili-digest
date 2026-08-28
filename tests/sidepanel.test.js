@@ -472,6 +472,31 @@ test("没有顺句结果时不进入顺句态", async () => {
   assert.equal(ctx.segmentDisplayText(SEGMENTS[0]), "第一段原文");
 });
 
+test("每句显示独立时间戳，点击保留原始字幕的小数开始时间", async () => {
+  const sentences = [
+    { id: "sentence-1", start: 12.5, text: "第一句。" },
+    { id: "sentence-2", start: 18.25, text: "第二句！" },
+  ];
+  const ctx = createContext({
+    transcript: transcriptResult({ segments: sentences }),
+  });
+  ctx.state.bvid = "BV1xx411c7mD";
+  ctx.state.tabId = 1;
+
+  await ctx.loadTranscript();
+
+  const rows = ctx.el("transcriptList").children[0].children;
+  assert.deepEqual(
+    rows.map((row) => row.children[0].textContent),
+    ["0:12", "0:18"],
+    "每个自然句都应有自己的可见时间戳",
+  );
+  assert.equal(ctx.el("segmentCount").textContent, "2 句");
+
+  await rows[0].dispatch("click");
+  assert.deepEqual(ctx.seeks, [12.5], "定位不得把真实开始时间向下取整");
+});
+
 test("换视频时，上一个视频的概览不会串台", async () => {
   const ctx = createContext({
     transcript: transcriptResult({ analysis: ANALYSIS }),

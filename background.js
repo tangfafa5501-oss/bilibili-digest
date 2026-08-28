@@ -698,10 +698,9 @@ async function handleSegmentRewrite(
   }
   const pageNumber = Number(page) > 0 ? Math.floor(Number(page)) : 1;
 
-  const cached = await BILI_CACHE.load(bvid, { page: pageNumber });
-  const transcript = cached?.segments?.length
-    ? { ...cached, success: true }
-    : await ensureTranscript(bvid, pageNumber);
+  // ensureTranscript 会把旧的段落粒度缓存迁移到当前自然句 schema；直接使用
+  // BILI_CACHE.load 会绕过迁移，并可能把旧译文错贴到新的句子 id 上。
+  const transcript = await ensureTranscript(bvid, pageNumber);
   if (!transcript.success) return transcript;
 
   const requested = new Set((segmentIds || []).map(String));
@@ -712,7 +711,7 @@ async function handleSegmentRewrite(
     return { success: false, error: "NO_SEGMENTS", message: "没有需要处理的分段。" };
   }
 
-  const done = cached?.[task.cacheKey] || {};
+  const done = transcript?.[task.cacheKey] || {};
   const todo = segments.filter((segment) => !done[segment.id]);
   if (!todo.length) {
     const hit = {};

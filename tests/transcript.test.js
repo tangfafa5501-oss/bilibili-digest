@@ -44,39 +44,67 @@ test("超长无标点内容按上限硬切，但优先切在标点或词边界",
   assert.equal(noBoundary.join(""), "啊".repeat(50));
 });
 
-test("无标点的 AI 字幕在原始字幕行边界切分，不会切碎词语", () => {
+test("无可靠句末标点时逐条回退，保留每条原始字幕的真实时间", () => {
   const segments = T.groupTranscriptEntries(AI_CAPTIONS);
 
-  assert.ok(segments.length >= 2, "十条字幕应该分成多段");
-  const entryTexts = AI_CAPTIONS.map((entry) => entry.text);
-  for (const segment of segments) {
-    assert.ok(
-      entryTexts.some((text) => segment.text.endsWith(text)),
-      `段落应结束于某条原始字幕的末尾：${segment.text}`,
-    );
-    assert.ok(segment.text.length <= T.CJK_LIMITS.maxChars * 1.2);
-  }
-
-  // 分段不能丢字
-  assert.equal(segments.map((s) => s.text).join(""), entryTexts.join(""));
+  assert.equal(segments.length, AI_CAPTIONS.length);
+  assert.deepEqual(
+    segments.map(({ text, start, fallback }) => ({ text, start, fallback })),
+    AI_CAPTIONS.map(({ text, start }) => ({ text, start, fallback: true })),
+  );
 });
 
-test("每段保留贡献首个文字的那条字幕的时间戳", () => {
-  const segments = T.groupTranscriptEntries(AI_CAPTIONS);
-  assert.equal(segments[0].start, 0);
-  for (let i = 1; i < segments.length; i += 1) {
-    assert.ok(segments[i].start > segments[i - 1].start, "时间戳应递增");
-  }
+test("自然句跨越多条字幕时取第一条的真实开始时间", () => {
+  const entries = [
+    { text: "第一句话讲的是背景，", start: 2, duration: 3 },
+    { text: "它决定后续取舍。", start: 5, duration: 3 },
+    { text: "第二句独立结束！", start: 8, duration: 3 },
+  ];
+  const segments = T.groupTranscriptEntries(entries);
+
+  assert.deepEqual(
+    segments.map(({ text, start, fallback }) => ({ text, start, fallback })),
+    [
+      { text: "第一句话讲的是背景，它决定后续取舍。", start: 2, fallback: false },
+      { text: "第二句独立结束！", start: 8, fallback: false },
+    ],
+  );
 });
 
-test("段落 id 稳定可用于翻译缓存键", () => {
+test("同一原始字幕里的多句共享真实时间，不按字符比例伪造", () => {
+  const segments = T.groupTranscriptEntries([
+    { text: "第一句。第二句？第三句没有句号", start: 12.5, duration: 6 },
+  ]);
+
+  assert.deepEqual(
+    segments.map(({ text, start, fallback }) => ({ text, start, fallback })),
+    [
+      { text: "第一句。", start: 12.5, fallback: false },
+      { text: "第二句？", start: 12.5, fallback: false },
+      { text: "第三句没有句号", start: 12.5, fallback: true },
+    ],
+  );
+});
+
+test("句末引号归入自然句，逗号和分号不提前切句", () => {
+  const segments = T.groupTranscriptEntries([
+    { text: "他说：“先看这里，", start: 0, duration: 2 },
+    { text: "再看那里；最后结束。” 下一句！", start: 2, duration: 4 },
+  ]);
+
+  assert.deepEqual(segments.map((segment) => segment.text), [
+    "他说：“先看这里，再看那里；最后结束。”",
+    "下一句！",
+  ]);
+  assert.deepEqual(segments.map((segment) => segment.start), [0, 2]);
+});
+
+test("每句 id 在相同输入下保持稳定，供翻译和顺句缓存使用", () => {
   const first = T.groupTranscriptEntries(AI_CAPTIONS);
   const second = T.groupTranscriptEntries(AI_CAPTIONS);
-  assert.deepEqual(
-    first.map((s) => s.id),
-    second.map((s) => s.id),
-  );
-  assert.match(first[0].id, /^segment-0-0$/);
+  assert.deepEqual(first.map((s) => s.id), second.map((s) => s.id));
+  assert.equal(first[0].start, 0);
+  assert.match(first[0].id, /^segment-r0-0$/);
 });
 
 test("有标点的中文字幕在句末切分", () => {
@@ -91,7 +119,7 @@ test("有标点的中文字幕在句末切分", () => {
     { text: "希望这个例子对你有帮助。", start: 21, duration: 3 },
   ];
   const segments = T.groupTranscriptEntries(entries);
-  assert.ok(segments.length >= 2);
+  assert.equal(segments.length, 4);
   for (const segment of segments) {
     assert.match(segment.text, /[。！？]$/, "应该切在句号后");
   }
