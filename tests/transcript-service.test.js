@@ -124,20 +124,24 @@ test("缓存命中时不再走网络，脏标志被现算值覆盖", async () =>
   assert.equal(apiCalls.length, 0, "命中缓存不应访问网络");
 });
 
-test("旧段落缓存重建为自然句，并清掉无法安全映射的改写结果", async () => {
+test("schema 3 缓存重建为带来源片段的自然句，并清掉不完整译文", async () => {
   apiCalls.length = 0;
   const analysis = { chapters: [{ title: "保留的概览" }] };
   const analysisFailures = [{ index: 2, startSeconds: 120, endSeconds: 180 }];
   const cache = makeFakeCache({
     [`${BVID}:p1`]: {
-      segmentSchemaVersion: 2,
+      segmentSchemaVersion: 3,
       transcript: [
         { start: 0, duration: 2, text: "第一句。第二句！" },
         { start: 2, duration: 2, text: "没有标点的尾句" },
       ],
-      segments: [{ id: "segment-0-0", start: 0, text: "旧的大段" }],
-      polished: { "segment-0-0": "旧顺句" },
+      segments: [{ id: "segment-s0-0-0", start: 0, text: "第一句。" }],
+      polished: {
+        "segment-s0-0-0": "保留的顺句。",
+        "已失效的-id": "不能错贴",
+      },
       translated: { "segment-0-0": "旧译文" },
+      translatedParts: { "segment-0-0::part-0": "只译了前半" },
       analysis,
       analysisFailures,
       unrelatedLearningState: { preserved: true },
@@ -148,27 +152,29 @@ test("旧段落缓存重建为自然句，并清掉无法安全映射的改写�
   const result = await service.fetchTranscript(BVID, { page: 1 });
 
   assert.equal(apiCalls.length, 0, "迁移缓存不应重新访问 B 站");
-  assert.equal(result.segmentSchemaVersion, 3);
+  assert.equal(result.segmentSchemaVersion, 4);
   assert.deepEqual(result.segments.map((segment) => segment.text), [
     "第一句。",
     "第二句！",
     "没有标点的尾句",
   ]);
   assert.deepEqual(result.segments.map((segment) => segment.start), [0, 0, 2]);
-  assert.deepEqual(result.polished, {});
+  assert.deepEqual(result.polished, { "segment-s0-0-0": "保留的顺句。" });
   assert.deepEqual(result.translated, {});
+  assert.deepEqual(result.translatedParts, {});
+  assert.ok(result.segments.every((segment) => segment.sourceParts.length > 0));
   assert.deepEqual(result.analysis, analysis, "概览等无关学习资料必须保留");
   assert.deepEqual(result.analysisFailures, analysisFailures);
   assert.deepEqual(result.unrelatedLearningState, { preserved: true });
   assert.equal(cache.calls.save, 1, "迁移结果应回写，后续不重复迁移");
 });
 
-test("schema 3 的当前译文直接复用，不重复迁移或清空", async () => {
+test("schema 4 的当前译文直接复用，不重复迁移或清空", async () => {
   apiCalls.length = 0;
   const current = {
     transcript: [{ start: 0, duration: 2, text: "Current sentence." }],
     segments: [{ id: "segment-s0-0-0", start: 0, text: "Current sentence." }],
-    segmentSchemaVersion: 3,
+    segmentSchemaVersion: 4,
     translated: { "segment-s0-0-0": "当前句。" },
   };
   const cache = makeFakeCache({ [`${BVID}:p1`]: current });
@@ -241,7 +247,7 @@ test("正常拉取组装全部字段并写入缓存", async () => {
   assert.equal(result.language, "zh-CN");
   assert.equal(result.isAiSubtitle, false);
   assert.equal(result.segments.length > 0, true);
-  assert.equal(result.segmentSchemaVersion, 3);
+  assert.equal(result.segmentSchemaVersion, 4);
   assert.ok(result.transcriptText.includes("第一句"));
   assert.equal(cache.calls.save, 1, "应落缓存");
   assert.equal(

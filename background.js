@@ -719,58 +719,96 @@ async function handleSegmentRewrite(
     return { success: true, fromCache: true, [task.cacheKey]: hit };
   }
 
+  const translationUnits = kind === "translate"
+    ? BILI_AI.buildTranslationUnits(todo)
+    : [];
+  const cachedTranslatedParts = transcript.translatedParts || {};
+  const modelItems = kind === "translate"
+    ? translationUnits.filter((unit) => !cachedTranslatedParts[unit.id])
+    : todo;
+
   try {
     throwIfTaskCanceled(signal);
-    const { variables: extraVariables, align } = await task.prepare(transcript);
-    const payload = {
-      segments: todo.map((segment) => ({ id: segment.id, text: segment.text })),
-    };
-    const variables = {
-      ...extraVariables,
-      videoTitle: transcript.videoInfo?.title || "未知",
-      segmentsJson: JSON.stringify(payload),
-    };
-    const [systemPrompt, userPrompt] = await Promise.all([
-      loadPromptSection(task.promptFile, "系统提示词", variables),
-      loadPromptSection(task.promptFile, "用户提示词", variables),
-    ]);
+    let accepted = {};
+    let rejected = [];
+    if (modelItems.length) {
+      const { variables: extraVariables, align } = await task.prepare(transcript);
+      const payload = {
+        segments: modelItems.map((segment) => ({ id: segment.id, text: segment.text })),
+      };
+      const variables = {
+        ...extraVariables,
+        videoTitle: transcript.videoInfo?.title || "未知",
+        segmentsJson: JSON.stringify(payload),
+      };
+      const [systemPrompt, userPrompt] = await Promise.all([
+        loadPromptSection(task.promptFile, "系统提示词", variables),
+        loadPromptSection(task.promptFile, "用户提示词", variables),
+      ]);
 
-    const { text } = await requestAiCompletion({
-      maxTokens: BILI_AI.estimateOutputTokens(variables.segmentsJson.length, {
-        ratio: task.tokenRatio,
-        floor: 2048,
-      }),
-      // 两者都是照着原文做的，不是创作，温度越低越贴近原意。
-      temperature: 0.2,
-      responseFormat: { type: "json_object" },
-      signal,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-    });
+      const { text } = await requestAiCompletion({
+        maxTokens: BILI_AI.estimateOutputTokens(variables.segmentsJson.length, {
+          ratio: task.tokenRatio,
+          floor: 2048,
+        }),
+        // 两者都是照着原文做的，不是创作，温度越低越贴近原意。
+        temperature: 0.2,
+        responseFormat: { type: "json_object" },
+        signal,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      });
 
-    const { accepted, rejected } = align(BILI_AI.parseLooseJson(text), todo);
+      ({ accepted, rejected } = align(BILI_AI.parseLooseJson(text), modelItems));
+    }
     throwIfTaskCanceled(signal);
     if (rejected.length) {
       debugLog(`[Bilibili Digest] ${task.label}丢弃的条目：`, rejected);
     }
 
     // 这些批次是并发跑的，读—改—写要走串行队列，否则会互相覆盖。
-    const saved = await updateCache(bvid, pageNumber, (current) => ({
-      ...current,
-      ...persistable(transcript),
-      [task.cacheKey]: { ...(current[task.cacheKey] || {}), ...accepted },
-    }));
+    const saved = await updateCache(bvid, pageNumber, (current) => {
+      if (kind !== "translate") {
+        return {
+          ...current,
+          ...persistable(transcript),
+          [task.cacheKey]: { ...(current[task.cacheKey] || {}), ...accepted },
+        };
+      }
+
+      const translatedParts = {
+        ...(current.translatedParts || {}),
+        ...accepted,
+      };
+      const completed = BILI_AI.composeTranslatedSegments(
+        translationUnits,
+        translatedParts,
+      );
+      return {
+        ...current,
+        ...persistable(transcript),
+        translatedParts,
+        translated: { ...(current.translated || {}), ...completed },
+      };
+    });
 
     // 命中缓存的那部分也一并回给侧边栏，它只认返回值。
-    const response = { ...accepted };
+    const response = kind === "translate"
+      ? BILI_AI.composeTranslatedSegments(translationUnits, saved.translatedParts || {})
+      : { ...accepted };
     for (const segment of segments) {
       if (!response[segment.id] && saved[task.cacheKey][segment.id]) {
         response[segment.id] = saved[task.cacheKey][segment.id];
       }
     }
-    return { success: true, fromCache: false, [task.cacheKey]: response, rejected };
+    return {
+      success: true,
+      fromCache: modelItems.length === 0,
+      [task.cacheKey]: response,
+      rejected,
+    };
   } catch (error) {
     console.error(`[Bilibili Digest] ${task.label}失败：`, error);
     return aiErrorResponse(error);

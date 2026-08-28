@@ -152,7 +152,7 @@ function createBackground({
     });
   }
 
-  return { storage, send, broadcasts, idb };
+  return { storage, send, broadcasts, idb, cacheStore };
 }
 
 // 笔记的正牌后端在沙箱的假 IndexedDB 里，用同一套真实驱动读出来断言。
@@ -251,6 +251,69 @@ test("后台任务协议拒绝同目标重复任务，并支持查询与取消",
     ctx.broadcasts.some(
       (message) => message.action === "aiTaskChanged" && message.task.state === "canceled",
     ),
+  );
+});
+
+test("跨原始条目的自然句只重试漏译子片段，全部覆盖后才缓存整句", async () => {
+  const requestedIds = [];
+  const ctx = createBackground({
+    cached: {
+      segmentSchemaVersion: 4,
+      transcript: [
+        { start: 222, duration: 5, text: "I can stay for a week." },
+        { start: 227, duration: 4, text: "Uncle Podger got up and tried again," },
+      ],
+      segments: [{
+        id: "sentence-1",
+        start: 222,
+        text: "I can stay for a week. Uncle Podger got up and tried again,",
+        sourceEntryIndexes: [0, 1],
+        sourceParts: [
+          { entryIndex: 0, start: 222, text: "I can stay for a week." },
+          { entryIndex: 1, start: 227, text: "Uncle Podger got up and tried again," },
+        ],
+      }],
+      translated: {},
+      translatedParts: {},
+      language: "en",
+      videoInfo: { title: "标题" },
+    },
+    aiReply: ({ options }) => {
+      const messages = JSON.parse(options.body).messages;
+      const prompt = messages.at(-1).content;
+      const ids = [...prompt.matchAll(/sentence-1::part-\d/g)].map((match) => match[0]);
+      requestedIds.push([...new Set(ids)]);
+      return requestedIds.length === 1
+        ? { segments: [{ id: "sentence-1::part-0", text: "我可以住一个星期。" }] }
+        : { segments: [{ id: "sentence-1::part-1", text: "波杰叔叔站起来又试了一次，" }] };
+    },
+  });
+
+  await ctx.send({ action: "startAiTask", taskId: "translate-1", kind: "translate" });
+  const first = await ctx.send({
+    action: "translateSegments",
+    taskId: "translate-1",
+    bvid: BVID,
+    page: 1,
+    segmentIds: ["sentence-1"],
+  });
+  assert.deepEqual(first.translated, {}, "只译前半时整句不能进入 translated 缓存");
+  assert.equal(
+    ctx.cacheStore[`${BVID}:1`].translatedParts["sentence-1::part-0"],
+    "我可以住一个星期。",
+  );
+
+  const second = await ctx.send({
+    action: "translateSegments",
+    taskId: "translate-1",
+    bvid: BVID,
+    page: 1,
+    segmentIds: ["sentence-1"],
+  });
+  assert.deepEqual(requestedIds[1], ["sentence-1::part-1"], "重试不能重复发送已成功子片段");
+  assert.equal(
+    second.translated["sentence-1"],
+    "我可以住一个星期。 波杰叔叔站起来又试了一次，",
   );
 });
 

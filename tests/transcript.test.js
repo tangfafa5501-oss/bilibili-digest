@@ -174,6 +174,10 @@ test("自然句跨越多条字幕时取第一条的真实开始时间", () => {
       { text: "第二句独立结束！", start: 8, fallback: false },
     ],
   );
+  assert.deepEqual(segments[0].sourceParts, [
+    { entryIndex: 0, start: 2, text: "第一句话讲的是背景，" },
+    { entryIndex: 1, start: 5, text: "它决定后续取舍。" },
+  ]);
 });
 
 test("同一原始字幕里的多句共享真实时间，不按字符比例伪造", () => {

@@ -913,6 +913,69 @@ test("多原始条目的长句译文覆盖合理时仍可通过", () => {
   assert.deepEqual(rejected, []);
 });
 
+test("自然句按真实来源片段拆成稳定翻译单元，缺一片就不合成整句", () => {
+  const segments = [{
+    id: "sentence-1",
+    start: 222,
+    text: "I can stay for a week. Uncle Podger got up and tried again,",
+    sourceEntryIndexes: [30, 31],
+    sourceParts: [
+      { entryIndex: 30, start: 222, text: "I can stay for a week." },
+      { entryIndex: 31, start: 227, text: "Uncle Podger got up and tried again," },
+    ],
+  }];
+
+  const units = AI.buildTranslationUnits(segments);
+  assert.deepEqual(units.map(({ id, parentId, text, start }) => ({ id, parentId, text, start })), [
+    {
+      id: "sentence-1::part-0",
+      parentId: "sentence-1",
+      text: "I can stay for a week.",
+      start: 222,
+    },
+    {
+      id: "sentence-1::part-1",
+      parentId: "sentence-1",
+      text: "Uncle Podger got up and tried again,",
+      start: 227,
+    },
+  ]);
+  assert.deepEqual(
+    AI.composeTranslatedSegments(units, {
+      "sentence-1::part-0": "我可以住一个星期。",
+    }),
+    {},
+    "只有前半译文时不能把整句标为完成",
+  );
+  assert.deepEqual(
+    AI.composeTranslatedSegments(units, {
+      "sentence-1::part-0": "我可以住一个星期。",
+      "sentence-1::part-1": "波杰叔叔站起来又试了一次，",
+    }),
+    { "sentence-1": "我可以住一个星期。 波杰叔叔站起来又试了一次，" },
+  );
+});
+
+test("短来源片段只翻译开头几个字也会被覆盖校验拒绝", () => {
+  const unit = [{
+    id: "sentence-1::part-1",
+    parentId: "sentence-1",
+    partIndex: 1,
+    text: "Uncle Podger got up and tried again, and at midnight he returned with the hammer.",
+    translationUnit: true,
+    sourceEntryIndexes: [31],
+  }];
+  const { translated, rejected } = AI.alignTranslatedSegments(
+    { segments: [{ id: unit[0].id, text: "波杰叔叔起身。" }] },
+    unit,
+  );
+
+  assert.deepEqual(translated, {});
+  assert.deepEqual(rejected, [
+    { id: "sentence-1::part-1", reason: "INCOMPLETE_TRANSLATION" },
+  ]);
+});
+
 test("翻译的批次比顺句小", () => {
   const segments = makeSegments(12, 200);
   const translation = AI.planTranslationBatches(segments);
