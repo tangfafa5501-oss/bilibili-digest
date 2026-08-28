@@ -127,8 +127,10 @@ test("缓存命中时不再走网络，脏标志被现算值覆盖", async () =>
 test("旧段落缓存重建为自然句，并清掉无法安全映射的改写结果", async () => {
   apiCalls.length = 0;
   const analysis = { chapters: [{ title: "保留的概览" }] };
+  const analysisFailures = [{ index: 2, startSeconds: 120, endSeconds: 180 }];
   const cache = makeFakeCache({
     [`${BVID}:p1`]: {
+      segmentSchemaVersion: 2,
       transcript: [
         { start: 0, duration: 2, text: "第一句。第二句！" },
         { start: 2, duration: 2, text: "没有标点的尾句" },
@@ -137,6 +139,8 @@ test("旧段落缓存重建为自然句，并清掉无法安全映射的改写�
       polished: { "segment-0-0": "旧顺句" },
       translated: { "segment-0-0": "旧译文" },
       analysis,
+      analysisFailures,
+      unrelatedLearningState: { preserved: true },
     },
   });
   const { service } = makeHarness({ cache });
@@ -144,7 +148,7 @@ test("旧段落缓存重建为自然句，并清掉无法安全映射的改写�
   const result = await service.fetchTranscript(BVID, { page: 1 });
 
   assert.equal(apiCalls.length, 0, "迁移缓存不应重新访问 B 站");
-  assert.equal(result.segmentSchemaVersion, 2);
+  assert.equal(result.segmentSchemaVersion, 3);
   assert.deepEqual(result.segments.map((segment) => segment.text), [
     "第一句。",
     "第二句！",
@@ -154,7 +158,27 @@ test("旧段落缓存重建为自然句，并清掉无法安全映射的改写�
   assert.deepEqual(result.polished, {});
   assert.deepEqual(result.translated, {});
   assert.deepEqual(result.analysis, analysis, "概览等无关学习资料必须保留");
+  assert.deepEqual(result.analysisFailures, analysisFailures);
+  assert.deepEqual(result.unrelatedLearningState, { preserved: true });
   assert.equal(cache.calls.save, 1, "迁移结果应回写，后续不重复迁移");
+});
+
+test("schema 3 的当前译文直接复用，不重复迁移或清空", async () => {
+  apiCalls.length = 0;
+  const current = {
+    transcript: [{ start: 0, duration: 2, text: "Current sentence." }],
+    segments: [{ id: "segment-s0-0-0", start: 0, text: "Current sentence." }],
+    segmentSchemaVersion: 3,
+    translated: { "segment-s0-0-0": "当前句。" },
+  };
+  const cache = makeFakeCache({ [`${BVID}:p1`]: current });
+  const { service } = makeHarness({ cache });
+
+  const result = await service.fetchTranscript(BVID, { page: 1 });
+
+  assert.deepEqual(result.translated, current.translated);
+  assert.equal(cache.calls.save, 0, "当前 schema 不应重复迁移");
+  assert.equal(apiCalls.length, 0);
 });
 
 test("缓存里的概览过期后能从学习资料恢复", async () => {
@@ -217,7 +241,7 @@ test("正常拉取组装全部字段并写入缓存", async () => {
   assert.equal(result.language, "zh-CN");
   assert.equal(result.isAiSubtitle, false);
   assert.equal(result.segments.length > 0, true);
-  assert.equal(result.segmentSchemaVersion, 2);
+  assert.equal(result.segmentSchemaVersion, 3);
   assert.ok(result.transcriptText.includes("第一句"));
   assert.equal(cache.calls.save, 1, "应落缓存");
   assert.equal(

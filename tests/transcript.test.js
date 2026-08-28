@@ -54,6 +54,111 @@ test("无可靠句末标点时逐条回退，保留每条原始字幕的真实�
   );
 });
 
+test("迟到句号不会把 0:00 到 0:47 冒充成一个自然句", () => {
+  const entries = [0, 10, 20, 30, 40, 47].map((start, index) => ({
+    start,
+    duration: index === 5 ? 1 : 5,
+    text: index === 5 ? "finally ends." : `opening part ${index}`,
+  }));
+
+  const segments = T.groupTranscriptEntries(entries);
+
+  assert.ok(segments.length >= 4, "迟到的句号不能把 47 秒内容压成一条");
+  assert.deepEqual(
+    segments.slice(0, 3).map(({ start, fallback }) => ({ start, fallback })),
+    [
+      { start: 0, fallback: true },
+      { start: 10, fallback: true },
+      { start: 20, fallback: true },
+    ],
+  );
+  assert.ok(
+    segments.every((segment) =>
+      entries.some((entry) => entry.start === segment.start),
+    ),
+  );
+});
+
+test("中段长时间无标点时回退，句界恢复后继续自然句组合", () => {
+  const entries = [
+    { start: 0, duration: 4, text: "A complete opening." },
+    { start: 5, duration: 5, text: "middle one" },
+    { start: 15, duration: 5, text: "middle two" },
+    { start: 25, duration: 5, text: "middle three" },
+    { start: 35, duration: 5, text: "middle finally ends." },
+    { start: 41, duration: 4, text: "Natural grouping resumes." },
+  ];
+
+  const segments = T.groupTranscriptEntries(entries);
+
+  assert.equal(segments[0].fallback, false);
+  assert.ok(segments.some((segment) => segment.start === 5 && segment.fallback));
+  assert.ok(segments.some((segment) => segment.start === 25 && segment.fallback));
+  assert.equal(segments.at(-1).text, "Natural grouping resumes.");
+  assert.equal(segments.at(-1).fallback, false);
+});
+
+test("可靠窗口恰好等于阈值仍可成句，超过才逐条回退", () => {
+  const limits = { maxSeconds: 20, maxChars: 999, maxEntries: 99 };
+  const exact = T.groupTranscriptEntries(
+    [
+      { start: 0, duration: 10, text: "exactly" },
+      { start: 10, duration: 10, text: "twenty seconds." },
+    ],
+    limits,
+  );
+  assert.deepEqual(exact.map(({ start, fallback }) => ({ start, fallback })), [
+    { start: 0, fallback: false },
+  ]);
+
+  const exceeded = T.groupTranscriptEntries(
+    [
+      { start: 0, duration: 10, text: "over" },
+      { start: 10, duration: 10, text: "the" },
+      { start: 20, duration: 1, text: "limit." },
+    ],
+    limits,
+  );
+  assert.deepEqual(
+    exceeded.map(({ start, fallback }) => ({ start, fallback })),
+    [
+      { start: 0, fallback: true },
+      { start: 10, fallback: true },
+      { start: 20, fallback: true },
+    ],
+  );
+});
+
+test("字符数超限也按原始条目回退，不等待很晚的句号", () => {
+  const segments = T.groupTranscriptEntries(
+    [
+      { start: 0, duration: 2, text: "a".repeat(8) },
+      { start: 2, duration: 2, text: "b".repeat(8) },
+      { start: 4, duration: 2, text: "c".repeat(8) + "." },
+    ],
+    { maxSeconds: 999, maxChars: 20, maxEntries: 99 },
+  );
+
+  assert.deepEqual(segments.map((segment) => segment.start), [0, 2, 4]);
+  assert.ok(segments.every((segment) => segment.fallback));
+});
+
+test("极密集字幕超过原始条目数上限也会回退", () => {
+  const entries = Array.from({ length: 13 }, (_, index) => ({
+    start: index * 0.5,
+    duration: 0.25,
+    text: index === 12 ? "end." : "part",
+  }));
+  const segments = T.groupTranscriptEntries(entries, {
+    maxSeconds: 999,
+    maxChars: 999,
+    maxEntries: 12,
+  });
+
+  assert.equal(segments.length, 13);
+  assert.ok(segments.every((segment) => segment.fallback));
+});
+
 test("自然句跨越多条字幕时取第一条的真实开始时间", () => {
   const entries = [
     { text: "第一句话讲的是背景，", start: 2, duration: 3 },

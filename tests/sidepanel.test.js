@@ -895,6 +895,74 @@ test("偶发失败的批次会自动补一轮，不用用户手点", async () =>
   );
 });
 
+test("批内漏回 ID 时只补译缺项，不重复请求已成功句", async () => {
+  const calls = [];
+  let first = true;
+  const ctx = createContext({
+    transcript: transcriptResult(EN),
+    replies: {
+      translateSegments(message) {
+        calls.push([...message.segmentIds]);
+        if (first) {
+          first = false;
+          return {
+            success: true,
+            translated: { s1: "第一句译文" },
+            rejected: [{ id: "s2", reason: "MISSING" }],
+          };
+        }
+        return { success: true, translated: { s2: "第二句译文" }, rejected: [] };
+      },
+    },
+  });
+  ctx.state.bvid = "BV1xx411c7mD";
+  await ctx.loadTranscript();
+
+  await ctx.setTranscriptMode("translated");
+
+  assert.deepEqual(calls, [["s1", "s2"], ["s2"]]);
+  assert.equal(ctx.state.translated.s1, "第一句译文");
+  assert.equal(ctx.state.translated.s2, "第二句译文");
+  assert.equal(ctx.state.translationFailed.size, 0);
+});
+
+test("缺项补译仍失败时显示未翻译并把任务标为失败", async () => {
+  const calls = [];
+  const ctx = createContext({
+    transcript: transcriptResult(EN),
+    replies: {
+      translateSegments(message) {
+        calls.push([...message.segmentIds]);
+        const translated = message.segmentIds.includes("s1")
+          ? { s1: "第一句译文" }
+          : {};
+        return {
+          success: true,
+          translated,
+          rejected: message.segmentIds
+            .filter((id) => id === "s2")
+            .map((id) => ({ id, reason: "MISSING" })),
+        };
+      },
+    },
+  });
+  ctx.state.bvid = "BV1xx411c7mD";
+  await ctx.loadTranscript();
+
+  await ctx.setTranscriptMode("translated");
+
+  assert.deepEqual(calls, [["s1", "s2"], ["s2"]]);
+  assert.deepEqual([...ctx.state.translationFailed], ["s2"]);
+  assert.match(ctx.el("segmentCount").textContent, /1 句未翻译/);
+  const failed = ctx.el("failed-translation");
+  ctx.paintSegmentText(failed, SEGMENTS[1]);
+  assert.equal(failed.children[1].textContent, "未翻译（可重试）");
+  assert.ok(
+    ctx.sent.some((message) =>
+      message.action === "finishAiTask" && message.state === "failed"),
+  );
+});
+
 test("字幕改写可停止，取消后不再继续启动新批次", async () => {
   const ctx = createContext({ transcript: transcriptResult() });
   ctx.state.bvid = NOTE.bvid;

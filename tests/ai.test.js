@@ -874,6 +874,45 @@ test("翻译同样拒绝漏条、编造 id 和空文本", () => {
   ]);
 });
 
+test("fallback 长段只翻译开头一小部分时拒绝缓存", () => {
+  const source = [
+    {
+      id: "long-fallback",
+      text: "Uncle Podger got up and tried again, and then the whole family waited while he searched for the nail and the hammer and the ruler and the chair before midnight.",
+      fallback: true,
+      sourceEntryIndexes: [10],
+    },
+  ];
+  const { translated, rejected } = AI.alignTranslatedSegments(
+    { segments: [{ id: "long-fallback", text: "波杰叔叔又站起来。" }] },
+    source,
+  );
+
+  assert.deepEqual(translated, {});
+  assert.deepEqual(rejected, [
+    { id: "long-fallback", reason: "INCOMPLETE_TRANSLATION" },
+  ]);
+});
+
+test("多原始条目的长句译文覆盖合理时仍可通过", () => {
+  const source = [
+    {
+      id: "complete-long",
+      text: "First breakfast, then lunch, tea, bread, butter, jam, eggs, bacon, cold meat, and enough food for everyone on the trip.",
+      sourceEntryIndexes: [20, 21, 22],
+    },
+  ];
+  const translation =
+    "先准备早餐，然后是午餐、茶、面包、黄油、果酱、鸡蛋、培根和冷肉，还要带够旅途中所有人吃的食物。";
+  const { translated, rejected } = AI.alignTranslatedSegments(
+    { segments: [{ id: "complete-long", text: translation }] },
+    source,
+  );
+
+  assert.equal(translated["complete-long"], translation);
+  assert.deepEqual(rejected, []);
+});
+
 test("翻译的批次比顺句小", () => {
   const segments = makeSegments(12, 200);
   const translation = AI.planTranslationBatches(segments);

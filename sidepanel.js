@@ -23,6 +23,7 @@ const state = {
   polished: {}, // 分段 id → 顺句后的文字
   polishMode: false,
   translated: {}, // 分段 id → 译文（中文字幕对应英文，外文字幕对应中文）
+  translationFailed: new Set(), // 本轮仍未翻出的分段，显示明确可重试状态
   transcriptMode: "original", // original | translated | bilingual
   isChinese: true, // 决定顺句入口的有无与翻译方向的提示
   polishRun: 0, // 换视频/切换显示方式时自增，用来作废进行中的批次
@@ -387,6 +388,7 @@ async function loadTranscript({ force = false } = {}) {
     // 之前顺过的句、翻过的译随缓存一起回来了，直接复用，不必再花一次钱。
     state.polished = result.polished || {};
     state.translated = result.translated || {};
+    state.translationFailed = new Set();
     state.polishRun += 1;
     // 缓存里有就直接摆出来，否则用户会以为上次白跑了。
     state.polishMode = Object.keys(state.polished).length > 0;
@@ -511,6 +513,7 @@ function writeText(node, text) {
 }
 
 function paintSegmentText(node, segment) {
+  const failed = state.translationFailed.has(segment.id);
   if (state.transcriptMode === "bilingual") {
     node.textContent = "";
     const source = document.createElement("span");
@@ -521,11 +524,24 @@ function paintSegmentText(node, segment) {
     const ready = state.translated[segment.id];
     translation.className = ready
       ? "segment-translation"
-      : "segment-translation pending";
+      : failed
+        ? "segment-translation failed"
+        : "segment-translation pending";
     if (ready) writeText(translation, ready);
-    else translation.textContent = "翻译中…";
+    else translation.textContent = failed ? "未翻译（可重试）" : "翻译中…";
 
     node.append(source, translation);
+    return;
+  }
+  if (state.transcriptMode === "translated" && failed && !state.translated[segment.id]) {
+    node.textContent = "";
+    const source = document.createElement("span");
+    source.className = "segment-source";
+    writeText(source, sourceText(segment));
+    const failure = document.createElement("span");
+    failure.className = "segment-translation failed";
+    failure.textContent = "未翻译（可重试）";
+    node.append(source, failure);
     return;
   }
   writeText(node, segmentDisplayText(segment));
@@ -903,6 +919,10 @@ async function runRewrite(kind, run) {
     return;
   }
   state.aiTasks.rewrite = { id: taskId, kind, label: task.label };
+  if (kind === "translate") {
+    for (const segment of todo) state.translationFailed.delete(segment.id);
+    repaintSegmentText(todo.map((segment) => segment.id));
+  }
 
   const batches = task.plan(orderFromPlayback(todo));
   const concurrency = (await loadSettings()).aiConcurrency;
@@ -925,6 +945,9 @@ async function runRewrite(kind, run) {
     if (run === state.polishRun) {
       const done = result[task.field] || {};
       Object.assign(state[task.field], done);
+      if (kind === "translate") {
+        for (const id of Object.keys(done)) state.translationFailed.delete(id);
+      }
       repaintSegmentText(Object.keys(done));
     }
     return result;
@@ -954,20 +977,23 @@ async function runRewrite(kind, run) {
   const failedIndexes = results
     .map((result, index) => (result.status === "rejected" ? index : -1))
     .filter((index) => index >= 0);
-  if (
-    failedIndexes.length &&
-    failedIndexes.length < batches.length &&
-    run === state.polishRun
-  ) {
+  const allBatchesFailed = failedIndexes.length === batches.length;
+  const retryById = new Map();
+  results.forEach((result, index) => {
+    if (result.status === "rejected" && allBatchesFailed) return;
+    for (const segment of batches[index]) {
+      if (!state[task.field][segment.id]) retryById.set(segment.id, segment);
+    }
+  });
+  if (retryById.size && run === state.polishRun) {
     await new Promise((resolve) => setTimeout(resolve, REWRITE_RETRY_DELAY_MS));
+    const retryBatches = task.plan([...retryById.values()]);
     const retried = await BILI_CONCURRENCY.mapWithConcurrency(
-      failedIndexes.map((index) => batches[index]),
+      retryBatches,
       concurrency,
       runBatch,
     );
-    failedIndexes.forEach((batchIndex, i) => {
-      if (retried[i].status === "fulfilled") results[batchIndex] = retried[i];
-    });
+    void retried;
   }
 
   if (run !== state.polishRun) {
@@ -976,6 +1002,11 @@ async function runRewrite(kind, run) {
   }
   hideProgress("rewrite");
 
+  const unresolved = todo.filter((segment) => !state[task.field][segment.id]);
+  if (kind === "translate") {
+    state.translationFailed = new Set(unresolved.map((segment) => segment.id));
+    repaintSegmentText(unresolved.map((segment) => segment.id));
+  }
   const failures = results.filter((result) => result.status === "rejected");
   if (failures.length === batches.length) {
     // 全失败多半是没配好或被限流，退回原文并说明原因。
@@ -983,12 +1014,18 @@ async function runRewrite(kind, run) {
     else state.transcriptMode = "original";
     repaintSegmentText();
     showSegmentNotice(failures[0].reason?.message || `${task.label}失败`);
-  } else if (failures.length) {
-    // 部分失败仍保留已成功的部分，剩下的再点一次即可补齐。
-    showSegmentNotice(`${failures.length} 批失败，再点一次「${task.label}」可以补齐。`);
+  } else if (unresolved.length) {
+    const retryHint = kind === "translate"
+      ? "切回原文后再进入译文或双语可重试。"
+      : `再点一次「${task.label}」可以补齐。`;
+    showSegmentNotice(`${unresolved.length} 句未${task.label}。${retryHint}`);
   }
   updateTranscriptControls();
-  await finishRewriteTask(taskId, "completed", "已完成");
+  await finishRewriteTask(
+    taskId,
+    unresolved.length ? "failed" : "completed",
+    unresolved.length ? `${unresolved.length} 句未${task.label}` : "已完成",
+  );
 }
 
 async function finishRewriteTask(taskId, taskState, message) {

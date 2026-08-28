@@ -727,6 +727,11 @@ button {
   font-style: italic;
 }
 
+.segment-translation.failed {
+  color: var(--warning, #b45309);
+  font-style: italic;
+}
+
 /* ---------- 进度条 ---------- */
 
 .progress {
