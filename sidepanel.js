@@ -483,9 +483,12 @@ function formatRawTimestamp(value) {
 }
 
 function rawCueForEntry(entry, index) {
-  const hasRawFrom = Object.prototype.hasOwnProperty.call(entry || {}, "from");
-  const hasRawTo = Object.prototype.hasOwnProperty.call(entry || {}, "to");
-  const hasRawContent = Object.prototype.hasOwnProperty.call(entry || {}, "content");
+  const hasRawFrom = Object.prototype.hasOwnProperty.call(entry || {}, "from")
+    && entry.from != null;
+  const hasRawTo = Object.prototype.hasOwnProperty.call(entry || {}, "to")
+    && entry.to != null;
+  const hasRawContent = Object.prototype.hasOwnProperty.call(entry || {}, "content")
+    && entry.content != null;
   const start = Number(entry?.start) || 0;
   const duration = Math.max(0, Number(entry?.duration) || 0);
   return {
@@ -512,7 +515,8 @@ function buildRawTranscriptView(data = state.data) {
     language: selected.lang || matched.lang || data?.language || "",
     label: selected.name || selected.langLabel || matched.langLabel
       || data?.languageLabel || data?.language || "",
-    isAi: selected.isAi ?? matched.isAi ?? Boolean(data?.isAiSubtitle),
+    isAi: selected.isAi ?? matched.isAi
+      ?? (typeof data?.isAiSubtitle === "boolean" ? data.isAiSubtitle : null),
   };
   return {
     body,
@@ -529,10 +533,12 @@ function renderRawTranscript(data = state.data) {
   const total = view.body.length;
   el("rawCueCount").textContent = `${total} 条原始 cue`;
 
-  const idText = String(view.track.id || "未记录（旧缓存）");
+  const idText = view.track.id == null || view.track.id === ""
+    ? "未记录（旧缓存）"
+    : String(view.track.id);
   const languageText = view.track.language || "未记录";
   const labelText = view.track.label || "未记录";
-  const aiText = view.track.isAi ? "是" : "否";
+  const aiText = view.track.isAi == null ? "未记录" : (view.track.isAi ? "是" : "否");
   const sourceText = view.sourceKnown
     ? (view.fromCache ? "缓存恢复" : "本次获取")
     : "来源未记录（旧缓存）";

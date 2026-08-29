@@ -174,6 +174,9 @@ test("schema 6 的有效 cue 译文重新派生自然句且不重复迁移", asy
   const current = {
     transcript: [{
       cueId: "cue-0-0-2000",
+      from: 0,
+      to: 2,
+      content: "Current sentence.",
       start: 0,
       duration: 2,
       text: "Current sentence.",
@@ -197,6 +200,7 @@ test("schema 6 的有效 cue 译文重新派生自然句且不重复迁移", asy
       },
     },
     translationFailed: [],
+    selectedTrack: { id: "cached-track", lang: "en-US", name: "英语", isAi: false },
   };
   const cache = makeFakeCache({ [`${BVID}:p1`]: current });
   const { service } = makeHarness({ cache });
@@ -204,6 +208,12 @@ test("schema 6 的有效 cue 译文重新派生自然句且不重复迁移", asy
   const result = await service.fetchTranscript(BVID, { page: 1 });
 
   assert.deepEqual(result.translated, current.translated);
+  assert.deepEqual(result.selectedTrack, current.selectedTrack, "缓存恢复必须保留已选轨元数据");
+  assert.deepEqual(
+    result.transcript.map(({ from, to, content }) => ({ from, to, content })),
+    [{ from: 0, to: 2, content: "Current sentence." }],
+    "缓存恢复必须保留同一份原始 cue",
+  );
   assert.equal(cache.calls.save, 0, "当前 schema 不应重复迁移");
   assert.equal(apiCalls.length, 0);
 });

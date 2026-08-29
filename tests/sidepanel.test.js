@@ -210,7 +210,7 @@ function createContext({
   // 所以在末尾追加一行，从同一个词法作用域里把要测的绑定递出来。
   const source = fs.readFileSync(path.join(ROOT, "sidepanel.js"), "utf8");
   vm.runInContext(
-    `${source}\n;globalThis.__api = { state, loadTranscript, analyze, cancelAnalysis, cancelRewrite, segmentDisplayText, paintSegmentText, setTranscriptMode, selectionContext, onSelectionChange, applySearchFilter, updateFollowPill, jumpToActive, closeSearch, renderNoteCard, playNote, loadNotes, syncQuoteButtonsWithNotes, exportNotes, exportLearning, buildRawTranscriptExport, exportRawTranscript, renderRawTranscript, renderNotes, applyNotesSearch, renderAnalysis, sendToBackground, submitQuestion, switchTab, appendAnswerText };`,
+    `${source}\n;globalThis.__api = { state, loadTranscript, analyze, cancelAnalysis, cancelRewrite, segmentDisplayText, paintSegmentText, setTranscriptMode, selectionContext, onSelectionChange, applySearchFilter, updateFollowPill, jumpToActive, closeSearch, renderNoteCard, playNote, loadNotes, syncQuoteButtonsWithNotes, exportNotes, exportLearning, buildRawTranscriptView, buildRawTranscriptExport, exportRawTranscript, renderRawTranscript, renderNotes, applyNotesSearch, renderAnalysis, sendToBackground, submitQuestion, switchTab, appendAnswerText };`,
     context,
   );
 
@@ -302,33 +302,79 @@ test("原始字幕 JSON 只导出轨道公开元数据和未聚合 cue", () => {
   }
 });
 
-test("原始字幕标签显示当前轨道 cue，并可按原始 from 跳转", async () => {
+test("原始字幕页按 body 顺序显示真实时间、内容、轨道和缓存来源", async () => {
   const transcript = transcriptResult({
-    language: "en-US",
-    languageLabel: "English",
-    selectedTrack: { id: "track-en", lang: "en-US", name: "English", isAi: false },
+    fromCache: true,
+    language: "ai-zh",
+    languageLabel: "中文（自动生成）",
+    isAiSubtitle: true,
+    selectedTrack: { id: "987", lang: "ai-zh", name: "中文（自动生成）", isAi: true },
     transcript: [
-      { from: 131.25, to: 133.5, content: "First cue", text: "First cue", start: 131.25, duration: 2.25 },
-      { from: 133.5, to: 136, content: "Second cue", text: "Second cue", start: 133.5, duration: 2.5 },
+      { from: 131, to: 133.5, content: "  第一条原始内容  ", text: "第一条原始内容", start: 131, duration: 2.5 },
+      { from: 133.5, to: 136.5, content: "第二条", text: "第二条", start: 133.5, duration: 3 },
     ],
+    subtitleUrl: "https://example.invalid/signed.json?token=secret",
+    apiKey: "secret-key",
   });
   const ctx = createContext({ transcript });
   ctx.state.view = "ready";
   ctx.state.data = transcript;
-  ctx.state.tabId = 7;
+  ctx.state.tabId = 1;
 
   ctx.switchTab("raw");
 
   assert.equal(ctx.el("rawPanel").hidden, false);
   assert.equal(ctx.el("transcriptPanel").hidden, true);
   assert.equal(ctx.el("rawCueCount").textContent, "2 条原始 cue");
-  assert.match(ctx.el("rawTrackMeta").textContent, /track-en/);
-  const fragment = ctx.el("rawCueList").children[0];
-  assert.equal(fragment.children.length, 2);
-  assert.equal(fragment.children[0].children[1].textContent, "First cue");
+  assert.match(ctx.el("rawTrackMeta").textContent, /轨道 id: 987/);
+  assert.match(ctx.el("rawTrackMeta").textContent, /语言: ai-zh/);
+  assert.match(ctx.el("rawTrackMeta").textContent, /标签: 中文（自动生成）/);
+  assert.match(ctx.el("rawTrackMeta").textContent, /AI: 是/);
+  assert.match(ctx.el("rawTrackMeta").textContent, /来源: 缓存恢复/);
+  assert.doesNotMatch(ctx.el("rawTrackMeta").textContent, /token=secret|secret-key|https:/);
 
-  await fragment.children[1].dispatch("click");
-  assert.deepEqual(ctx.seeks, [133.5]);
+  const rows = ctx.el("rawCueList").children[0].children;
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((row) => row.children[0].children[0].textContent), ["#1 / 2", "#2 / 2"]);
+  assert.equal(rows[0].children[0].children[1].textContent, "from 02:11.000 (131)");
+  assert.equal(rows[0].children[0].children[2].textContent, "to 02:13.500 (133.5)");
+  assert.equal(rows[0].children[1].textContent, "  第一条原始内容  ");
+  assert.equal(ctx.el("rawCompatibilityNote").hidden, true);
+
+  await rows[0].dispatch("click");
+  assert.deepEqual(ctx.seeks, [131]);
+});
+
+test("原始字幕页兼容旧缓存并明确标注缺失字段和轨道元数据", () => {
+  const ctx = createContext({ transcript: transcriptResult() });
+  const oldCache = {
+    fromCache: true,
+    language: "zh-CN",
+    transcript: [{ start: 131, duration: 4, text: "旧缓存字幕" }],
+  };
+  ctx.renderRawTranscript(oldCache);
+  const view = JSON.parse(JSON.stringify(ctx.buildRawTranscriptView(oldCache)));
+
+  assert.deepEqual(view.body[0], {
+    index: 0,
+    cueId: "cue-0-131000-4000",
+    from: 131,
+    to: 135,
+    content: "旧缓存字幕",
+    compatibilityRecovered: true,
+  });
+  assert.equal(ctx.el("rawCompatibilityNote").hidden, false);
+  assert.match(ctx.el("rawCompatibilityNote").textContent, /兼容恢复/);
+  assert.match(ctx.el("rawCompatibilityNote").textContent, /轨元数据不完整/);
+  assert.match(ctx.el("rawTrackMeta").textContent, /来源: 缓存恢复/);
+});
+
+test("侧边栏 HTML 提供独立原始字幕入口和 cue 容器", () => {
+  const html = fs.readFileSync(path.join(ROOT, "sidepanel.html"), "utf8");
+  assert.match(html, /data-tab=["']raw["'][^>]*>原始字幕</);
+  assert.match(html, /id=["']rawPanel["']/);
+  assert.match(html, /id=["']rawTrackMeta["']/);
+  assert.match(html, /id=["']rawCueList["']/);
 });
 
 // ============================================================
