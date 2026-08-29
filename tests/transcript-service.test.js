@@ -14,19 +14,19 @@ globalThis.BILI_API = {
   },
   fetchSubtitleTracks: async () => ({
     tracks: [
-      { url: "https://subtitle.example/json", lang: "zh-CN", langLabel: "中文", isAi: false },
-      { url: "https://subtitle.example/ai", lang: "ai-zh", langLabel: "AI 中文", isAi: true },
+      { id: "human-1", url: "https://subtitle.example/json", lang: "zh-CN", langLabel: "中文", isAi: false },
+      { id: "ai-2", url: "https://subtitle.example/ai", lang: "ai-zh", langLabel: "AI 中文", isAi: true },
     ],
     needLogin: false,
   }),
   pickSubtitleTrack: (tracks) => tracks[0],
   fetchSubtitleTrackContent: async (url) => {
     apiCalls.push(`content:${url}`);
-    // 生产里 bili-api 已把 B 站的 {from,to,content} 归一成 {start,duration,text}。
+    // 生产里 bili-api 同时保留原始字段与扩展内部时间视图。
     return url.includes("json")
       ? [
-          { start: 0, duration: 2, text: "第一句" },
-          { start: 2, duration: 2, text: "第二句" },
+          { from: 0, to: 2, content: "第一句", start: 0, duration: 2, text: "第一句" },
+          { from: 2, to: 4, content: "第二句", start: 2, duration: 2, text: "第二句" },
         ]
       : [];
   },
@@ -286,7 +286,8 @@ test("无字幕轨区分需要登录与确实没有", async () => {
   // 还原给后续用例。
   globalThis.BILI_API.fetchSubtitleTracks = async () => ({
     tracks: [
-      { url: "https://subtitle.example/json", lang: "zh-CN", langLabel: "中文", isAi: false },
+      { id: "human-1", url: "https://subtitle.example/json", lang: "zh-CN", langLabel: "中文", isAi: false },
+      { id: "ai-2", url: "https://subtitle.example/ai", lang: "ai-zh", langLabel: "AI 中文", isAi: true },
     ],
     needLogin: false,
   });
@@ -303,6 +304,20 @@ test("正常拉取组装全部字段并写入缓存", async () => {
   assert.equal(result.fromCache, false);
   assert.equal(result.language, "zh-CN");
   assert.equal(result.isAiSubtitle, false);
+  assert.deepEqual(result.selectedTrack, {
+    id: "human-1",
+    lang: "zh-CN",
+    name: "中文",
+    isAi: false,
+  });
+  assert.deepEqual(result.availableTracks.map((track) => track.id), ["human-1", "ai-2"]);
+  assert.deepEqual(
+    result.transcript.map(({ from, to, content }) => ({ from, to, content })),
+    [
+      { from: 0, to: 2, content: "第一句" },
+      { from: 2, to: 4, content: "第二句" },
+    ],
+  );
   assert.equal(result.segments.length > 0, true);
   assert.equal(result.segmentSchemaVersion, 6);
   assert.ok(result.transcriptText.includes("第一句"));

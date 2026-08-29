@@ -140,7 +140,7 @@ test("自定义语言偏好可以改变选轨结果", () => {
   assert.equal(API.pickSubtitleTrack(tracks, ["en-US", "zh-CN"]).url, "en");
 });
 
-test("字幕正文转成 {text, start, duration}", () => {
+test("字幕正文保留原始 cue 字段和顺序，同时产出内部时间视图", () => {
   const entries = API.normalizeSubtitleBody({
     body: [
       { from: 0, to: 2.5, content: "第一句" },
@@ -151,7 +151,15 @@ test("字幕正文转成 {text, start, duration}", () => {
   });
 
   assert.equal(entries.length, 3, "空白字幕行应被丢弃");
-  assert.deepEqual(entries[0], { text: "第一句", start: 0, duration: 2.5 });
+  assert.deepEqual(entries[0], {
+    from: 0,
+    to: 2.5,
+    content: "第一句",
+    text: "第一句",
+    start: 0,
+    duration: 2.5,
+  });
+  assert.equal(entries[1].content, "  第二句  ", "导出字段不能被 trim 改写");
   assert.equal(entries[1].text, "第二句");
   assert.equal(entries[2].duration, 0);
 });

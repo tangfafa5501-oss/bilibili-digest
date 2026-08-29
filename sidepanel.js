@@ -194,6 +194,7 @@ const SECTIONS = [
   "idleState",
   "errorState",
   "transcriptPanel",
+  "rawPanel",
   "overviewPanel",
   "notesPanel",
   "qaPanel",
@@ -213,6 +214,11 @@ function render() {
   }
   if (state.view !== "ready") {
     el(`${state.view}State`).hidden = false;
+    return;
+  }
+  if (state.tab === "raw") {
+    renderRawTranscript();
+    el("rawPanel").hidden = false;
     return;
   }
   el(state.tab === "overview" ? "overviewPanel" : "transcriptPanel").hidden = false;
@@ -463,6 +469,115 @@ function renderSegments(segments = []) {
       // 搜索用的可匹配文本在这里一次算好，逐键过滤时直接读，不再每敲一个字符重建。
       searchText: buildSegmentSearchText(segment),
     });
+  });
+  list.appendChild(fragment);
+}
+
+function formatRawTimestamp(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return "无效时间";
+  const safe = Math.max(0, seconds);
+  const minutes = Math.floor(safe / 60);
+  const remainder = safe - minutes * 60;
+  return `${String(minutes).padStart(2, "0")}:${remainder.toFixed(3).padStart(6, "0")}`;
+}
+
+function rawCueForEntry(entry, index) {
+  const hasRawFrom = Object.prototype.hasOwnProperty.call(entry || {}, "from");
+  const hasRawTo = Object.prototype.hasOwnProperty.call(entry || {}, "to");
+  const hasRawContent = Object.prototype.hasOwnProperty.call(entry || {}, "content");
+  const start = Number(entry?.start) || 0;
+  const duration = Math.max(0, Number(entry?.duration) || 0);
+  return {
+    index,
+    cueId: entry?.cueId || BILI_TRANSCRIPT.cueIdForEntry(entry, index),
+    from: hasRawFrom ? entry.from : start,
+    to: hasRawTo ? entry.to : start + duration,
+    content: hasRawContent ? String(entry.content ?? "") : String(entry?.text || ""),
+    compatibilityRecovered: !(hasRawFrom && hasRawTo && hasRawContent),
+  };
+}
+
+function buildRawTranscriptView(data = state.data) {
+  const entries = Array.isArray(data?.transcript) ? data.transcript : [];
+  const body = entries.map(rawCueForEntry);
+  const selected = data?.selectedTrack || {};
+  const available = Array.isArray(data?.availableTracks) ? data.availableTracks : [];
+  const matched = available.find((track) => (
+    (selected.id != null && String(track?.id ?? "") === String(selected.id))
+    || (!selected.id && track?.lang && track.lang === (selected.lang || data?.language))
+  )) || {};
+  const track = {
+    id: selected.id ?? matched.id ?? "",
+    language: selected.lang || matched.lang || data?.language || "",
+    label: selected.name || selected.langLabel || matched.langLabel
+      || data?.languageLabel || data?.language || "",
+    isAi: selected.isAi ?? matched.isAi ?? Boolean(data?.isAiSubtitle),
+  };
+  return {
+    body,
+    track,
+    fromCache: data?.fromCache === true,
+    sourceKnown: typeof data?.fromCache === "boolean",
+    compatibilityRecovered: body.some((cue) => cue.compatibilityRecovered),
+    trackMetadataMissing: !String(track.id) || !track.language || !track.label,
+  };
+}
+
+function renderRawTranscript(data = state.data) {
+  const view = buildRawTranscriptView(data);
+  const total = view.body.length;
+  el("rawCueCount").textContent = `${total} 条原始 cue`;
+
+  const idText = String(view.track.id || "未记录（旧缓存）");
+  const languageText = view.track.language || "未记录";
+  const labelText = view.track.label || "未记录";
+  const aiText = view.track.isAi ? "是" : "否";
+  const sourceText = view.sourceKnown
+    ? (view.fromCache ? "缓存恢复" : "本次获取")
+    : "来源未记录（旧缓存）";
+  el("rawTrackMeta").textContent =
+    `轨道 id: ${idText} · 语言: ${languageText} · 标签: ${labelText} · AI: ${aiText} · 来源: ${sourceText}`;
+
+  const compatibility = el("rawCompatibilityNote");
+  const compatibilityParts = [];
+  if (view.compatibilityRecovered) {
+    compatibilityParts.push("部分旧缓存没有保存 from / to / content，已用 start / duration / text 兼容恢复");
+  }
+  if (view.trackMetadataMissing) {
+    compatibilityParts.push("旧缓存的字幕轨元数据不完整");
+  }
+  compatibility.textContent = compatibilityParts.join("；");
+  compatibility.hidden = compatibilityParts.length === 0;
+
+  const list = el("rawCueList");
+  list.textContent = "";
+  const fragment = document.createDocumentFragment();
+  view.body.forEach((cue) => {
+    const row = document.createElement("article");
+    row.className = "raw-cue";
+    row.dataset.index = String(cue.index);
+    row.dataset.cueId = cue.cueId;
+
+    const meta = document.createElement("div");
+    meta.className = "raw-cue-meta";
+    const index = document.createElement("span");
+    index.className = "raw-cue-index";
+    index.textContent = `#${cue.index + 1} / ${total}`;
+    const from = document.createElement("span");
+    from.textContent = `from ${formatRawTimestamp(cue.from)} (${String(cue.from)})`;
+    const to = document.createElement("span");
+    to.textContent = `to ${formatRawTimestamp(cue.to)} (${String(cue.to)})`;
+    meta.append(index, from, to);
+
+    const content = document.createElement("p");
+    content.className = "raw-cue-content";
+    content.textContent = cue.content;
+    row.append(meta, content);
+    if (Number.isFinite(Number(cue.from))) {
+      row.addEventListener("click", (event) => onEntryClick(event, Number(cue.from)));
+    }
+    fragment.appendChild(row);
   });
   list.appendChild(fragment);
 }
@@ -2286,6 +2401,44 @@ function exportTranscript() {
   downloadText(header + transcriptAsText(), `${sanitizeFilename(title)}.txt`, "text/plain;charset=utf-8");
 }
 
+function buildRawTranscriptExport(data = state.data) {
+  if (!data || !Array.isArray(data.transcript)) return null;
+  const view = buildRawTranscriptView(data);
+  const body = view.body.map(({ compatibilityRecovered, ...cue }) => cue);
+  return {
+    format: "bilibili-digest-raw-subtitle",
+    version: 1,
+    video: {
+      bvid: state.bvid || data.videoInfo?.bvid || "",
+      page: state.page || data.videoInfo?.page || 1,
+      cid: data.videoInfo?.cid || 0,
+      title: data.videoInfo?.title || "",
+    },
+    track: {
+      id: String(view.track.id ?? ""),
+      language: view.track.language,
+      name: view.track.label,
+      isAi: view.track.isAi,
+    },
+    source: view.sourceKnown ? (view.fromCache ? "cache" : "fetched") : "unknown",
+    compatibilityRecovered: view.compatibilityRecovered,
+    cueCount: body.length,
+    body,
+  };
+}
+
+function exportRawTranscript() {
+  const payload = buildRawTranscriptExport();
+  if (!payload) return;
+  const title = state.data?.videoInfo?.title || state.bvid || "subtitle";
+  downloadText(
+    JSON.stringify(payload, null, 2),
+    `${sanitizeFilename(title)}-原始字幕.json`,
+    "application/json;charset=utf-8",
+  );
+  flashButton(el("rawExportBtn"), "已导出");
+}
+
 function exportNotes() {
   const menu = el("notesExportMenu");
   if (menu) menu.open = false;
@@ -2396,6 +2549,7 @@ function setupEventListeners() {
   }
   el("copyBtn").addEventListener("click", copyTranscript);
   el("exportBtn").addEventListener("click", exportTranscript);
+  el("rawExportBtn").addEventListener("click", exportRawTranscript);
   el("exportNotesBtn").addEventListener("click", exportNotes);
   for (const button of document.querySelectorAll("[data-learning-export]")) {
     button.addEventListener("click", () => {

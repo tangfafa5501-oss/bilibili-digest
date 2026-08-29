@@ -74,6 +74,7 @@
 
     <nav class="tabs" role="tablist">
       <button class="tab active" data-tab="transcript" role="tab" aria-selected="true">字幕</button>
+      <button class="tab" data-tab="raw" role="tab" aria-selected="false">原始字幕</button>
       <button class="tab" data-tab="overview" role="tab" aria-selected="false">概览</button>
       <button class="tab" data-tab="notes" role="tab" aria-selected="false">笔记</button>
       <button class="tab" data-tab="qa" role="tab" aria-selected="false">问答</button>
@@ -157,6 +158,22 @@
         <button id="rewriteStopBtn" class="ghost-btn task-stop-btn" type="button">停止</button>
       </div>
       <div id="transcriptList" class="transcript-list"></div>
+    </section>
+
+    <!-- B 站字幕 JSON 的 body cue：不做自然句聚合，不走翻译或顺句。 -->
+    <section id="rawPanel" hidden>
+      <div class="panel-toolbar">
+        <span id="rawCueCount" class="muted"></span>
+        <div class="panel-toolbar-actions">
+          <button id="rawExportBtn" class="ghost-btn" title="导出当前显示的 B 站原始 cue，不含翻译和用户数据">导出 JSON</button>
+        </div>
+      </div>
+      <div class="raw-diagnostics">
+        <p class="raw-explanation">这里直接显示扩展实际下载并使用的 B 站 subtitle body cue，保持原始顺序；没有自然句分段、顺句或 AI 翻译。</p>
+        <p id="rawTrackMeta" class="raw-track-meta"></p>
+        <p id="rawCompatibilityNote" class="raw-compatibility-note" hidden></p>
+      </div>
+      <div id="rawCueList" class="raw-cue-list"></div>
     </section>
 
     <!-- 概览 -->

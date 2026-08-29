@@ -210,7 +210,7 @@ function createContext({
   // 所以在末尾追加一行，从同一个词法作用域里把要测的绑定递出来。
   const source = fs.readFileSync(path.join(ROOT, "sidepanel.js"), "utf8");
   vm.runInContext(
-    `${source}\n;globalThis.__api = { state, loadTranscript, analyze, cancelAnalysis, cancelRewrite, segmentDisplayText, paintSegmentText, setTranscriptMode, selectionContext, onSelectionChange, applySearchFilter, updateFollowPill, jumpToActive, closeSearch, renderNoteCard, playNote, loadNotes, syncQuoteButtonsWithNotes, exportNotes, exportLearning, renderNotes, applyNotesSearch, renderAnalysis, sendToBackground, submitQuestion, switchTab, appendAnswerText };`,
+    `${source}\n;globalThis.__api = { state, loadTranscript, analyze, cancelAnalysis, cancelRewrite, segmentDisplayText, paintSegmentText, setTranscriptMode, selectionContext, onSelectionChange, applySearchFilter, updateFollowPill, jumpToActive, closeSearch, renderNoteCard, playNote, loadNotes, syncQuoteButtonsWithNotes, exportNotes, exportLearning, buildRawTranscriptExport, exportRawTranscript, renderRawTranscript, renderNotes, applyNotesSearch, renderAnalysis, sendToBackground, submitQuestion, switchTab, appendAnswerText };`,
     context,
   );
 
@@ -248,6 +248,88 @@ function transcriptResult(extra = {}) {
     ...extra,
   };
 }
+
+test("原始字幕 JSON 只导出轨道公开元数据和未聚合 cue", () => {
+  const transcript = transcriptResult({
+    videoInfo: { bvid: "BV1xx411c7mD", page: 1, cid: 123, title: "标题" },
+    language: "ai-zh",
+    languageLabel: "中文（自动生成）",
+    isAiSubtitle: true,
+    selectedTrack: { id: "987", lang: "ai-zh", name: "中文（自动生成）", isAi: true },
+    transcript: [
+      {
+        cueId: "cue-0-131000-2500",
+        from: 131,
+        to: 133.5,
+        content: "  第一条原始内容  ",
+        text: "第一条原始内容",
+        start: 131,
+        duration: 2.5,
+      },
+      {
+        cueId: "cue-1-133500-3000",
+        from: 133.5,
+        to: 136.5,
+        content: "第二条",
+        text: "第二条",
+        start: 133.5,
+        duration: 3,
+      },
+    ],
+    translated: { s1: "不得导出" },
+    notes: [{ text: "不得导出" }],
+    apiKey: "不得导出",
+    subtitleUrl: "https://example.invalid/signed.json?token=secret",
+  });
+  const ctx = createContext({ transcript });
+  ctx.state.bvid = "BV1xx411c7mD";
+  ctx.state.page = 1;
+  ctx.state.data = transcript;
+
+  const payload = JSON.parse(JSON.stringify(ctx.buildRawTranscriptExport()));
+
+  assert.equal(payload.track.id, "987");
+  assert.equal(payload.track.language, "ai-zh");
+  assert.equal(payload.track.isAi, true);
+  assert.equal(payload.cueCount, 2);
+  assert.deepEqual(payload.body.map(({ from, to, content }) => ({ from, to, content })), [
+    { from: 131, to: 133.5, content: "  第一条原始内容  " },
+    { from: 133.5, to: 136.5, content: "第二条" },
+  ]);
+  const json = JSON.stringify(payload);
+  for (const secret of ["不得导出", "token=secret", "apiKey", "translated", "notes", "segments"]) {
+    assert.equal(json.includes(secret), false, `原始字幕导出泄露了 ${secret}`);
+  }
+});
+
+test("原始字幕标签显示当前轨道 cue，并可按原始 from 跳转", async () => {
+  const transcript = transcriptResult({
+    language: "en-US",
+    languageLabel: "English",
+    selectedTrack: { id: "track-en", lang: "en-US", name: "English", isAi: false },
+    transcript: [
+      { from: 131.25, to: 133.5, content: "First cue", text: "First cue", start: 131.25, duration: 2.25 },
+      { from: 133.5, to: 136, content: "Second cue", text: "Second cue", start: 133.5, duration: 2.5 },
+    ],
+  });
+  const ctx = createContext({ transcript });
+  ctx.state.view = "ready";
+  ctx.state.data = transcript;
+  ctx.state.tabId = 7;
+
+  ctx.switchTab("raw");
+
+  assert.equal(ctx.el("rawPanel").hidden, false);
+  assert.equal(ctx.el("transcriptPanel").hidden, true);
+  assert.equal(ctx.el("rawCueCount").textContent, "2 条原始 cue");
+  assert.match(ctx.el("rawTrackMeta").textContent, /track-en/);
+  const fragment = ctx.el("rawCueList").children[0];
+  assert.equal(fragment.children.length, 2);
+  assert.equal(fragment.children[0].children[1].textContent, "First cue");
+
+  await fragment.children[1].dispatch("click");
+  assert.deepEqual(ctx.seeks, [133.5]);
+});
 
 // ============================================================
 // service worker 被回收后的消息通道

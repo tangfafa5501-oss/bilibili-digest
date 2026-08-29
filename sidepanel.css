@@ -341,7 +341,7 @@ button {
   min-width: 0;
   padding: 7px 4px;
   text-align: center;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-muted);
   background: transparent;
@@ -705,6 +705,78 @@ button {
 .segment.active .segment-time {
   color: var(--accent-strong);
   font-weight: 600;
+}
+
+/* ---------- 原始字幕诊断 ---------- */
+
+.raw-diagnostics {
+  margin: 10px 14px 6px;
+  padding: 10px 12px;
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.raw-explanation,
+.raw-track-meta,
+.raw-compatibility-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.raw-track-meta {
+  margin-top: 6px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.raw-compatibility-note {
+  margin-top: 6px;
+  color: #a15c00;
+}
+
+.raw-cue-list {
+  padding: 4px 8px 40px;
+}
+
+.raw-cue {
+  padding: 10px;
+  margin-bottom: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.raw-cue:hover {
+  background: var(--bg-hover);
+}
+
+.raw-cue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+}
+
+.raw-cue-index {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.raw-cue-content {
+  margin: 7px 0 0;
+  color: var(--text);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* 双语：原文在上、译文在下，各占一行 */
